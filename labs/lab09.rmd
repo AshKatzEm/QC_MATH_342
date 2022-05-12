@@ -1,0 +1,323 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: inline
+---
+title: "Lab 9"
+author: "Asher KAtz"
+output: pdf_document
+---
+
+In this next first part of this lab, we will be joining three datasets in an effort to make a design matrix that predicts if a bill will be paid on time. Clean up and load up the three files. Then I'll rename a few features and then we can examine the data frames:
+
+```{r}
+
+rm(list = ls())
+pacman::p_load(tidyverse, magrittr, data.table, R.utils)
+bills_data = fread("https://github.com/kapelner/QC_MATH_342W_Spring_2021/raw/master/labs/bills_dataset/bills.csv.bz2")
+payments = fread("https://github.com/kapelner/QC_MATH_342W_Spring_2021/raw/master/labs/bills_dataset/payments.csv.bz2")
+discounts = fread("https://github.com/kapelner/QC_MATH_342W_Spring_2021/raw/master/labs/bills_dataset/discounts.csv.bz2")
+setnames(bills_data, "amount", "tot_amount")
+setnames(payments, "amount", "paid_amount")
+head(bills_data)
+head(payments)
+head(discounts)
+```
+
+The unit we care about is the bill. The y metric we care about will be "paid in full" which is 1 if the company paid their total amount (we will generate this y metric later).
+
+Since this is the response, we would like to construct the very best design matrix in order to predict y.
+
+I will create the basic steps for you guys. First, join the three datasets in an intelligent way. You will need to examine the datasets beforehand.
+
+```{r}
+bills_with_payments = merge(bills_data, payments, all.x = TRUE, by.x = "id", by.y = "bill_id")
+bills_with_payments[, id.y := NULL]
+
+discounts[,discount_num_days := factor(num_days)]
+discounts[,discount_pct_off := factor(pct_off)]
+discounts[,discount_days_until_discount := factor(days_until_discount)]
+discounts[is.na(discount_num_days), discount_num_days := "missing"]
+discounts[is.na(discount_pct_off), discount_pct_off := "missing"]
+discounts[is.na(discount_days_until_discount), discount_days_until_discount := "missing"]
+
+bills_with_payments_with_discounts = merge(bills_with_payments, discounts, all.x = TRUE, by.x = "discount_id", by.y = "id")
+colnames(bills_with_payments_with_discounts)
+setorder(bills_with_payments_with_discounts, id)
+```
+
+Now create the binary response metric `paid_in_full` as the last column and create the beginnings of a design matrix `bills_data`. Ensure the unit / observation is bill i.e. each row should be one bill! 
+
+```{r}
+#TO-DO
+
+
+bills_with_payments_with_discounts[, total_paid_so_far := sum(paid_amount, na.rm = TRUE), by = id]
+#ideally should be cumamalitve sum
+bills_with_payments_with_discounts[, paid_bill := total_paid_so_far >= tot_amount, by = id]
+bills_data = bills_with_payments_with_discounts[, .(paid_in_full = any(paid_bill)), by = id]
+table(bills_data$paid_in_full, useNA = "always") 
+```
+
+How should you add features from transformations (called "featurization")? What data type(s) should they be? Make some features below if you think of any useful ones. Name the columns appropriately so another data scientist can easily understand what information is in your variables.
+
+```{r}
+#TO-DO
+pacman::p_load(lubridate)
+bills_with_payments_with_discounts[,num_days_to_pay := as.integer(ymd(due_date) - ymd(invoice_date))]
+
+bills_data = bills_with_payments_with_discounts[,.(
+  paid_in_full = as.integer(any(paid_bill)),
+  customer_id = first(customer_id),
+  tot_amount=first(tot_amount),
+  num_days_to_pay = first(num_days_to_pay),
+  discount_pct_off = first(discount_pct_off),
+  discount_days_until_discount =first(discount_days_until_discount)
+), by = id]
+bills_data[,discount_pct_off := factor(discount_pct_off, exclude = NULL)]
+
+bills_data[ ,num_previous_bills := 0 : (.N - 1), by = customer_id]
+
+bills_data[, customer_id:= NULL]
+
+bills_data[num_days_to_pay == 0, num_days_to_pay:= 1]
+bills_data[, dollars_owed_per_day := tot_amount/ num_days_to_pay]
+bills_data[, paid_in_full := factor(paid_in_full)]
+bills_data[, id:= NULL]
+bills_data
+
+```
+
+Now let's do this exercise. Let's retain 25% of our data for test.
+
+```{r}
+K = 4
+test_indices = sample(1 : nrow(bills_data), round(nrow(bills_data) / K))
+train_indices = setdiff(1 : nrow(bills_data), test_indices)
+bills_data_test = bills_data[test_indices, ]
+Xtest = bills_data_test[,-"paid_in_full"]
+ytest = bills_data_test[,paid_in_full]
+bills_data_train = bills_data[train_indices, ]
+```
+
+Now try to build a classification tree model for `paid_in_full` with the features (use the `Xy` parameter in `YARF`). If you cannot get `YARF` to install, use the package `rpart` (the standard R tree package) instead. You will need to install it and read through some documentation to find the correct syntax.
+
+Warning: this data is highly anonymized and there is likely zero signal! So don't expect to get predictive accuracy. The value of the exercise is in the practice. I think this exercise (with the joining exercise above) may be one of the most useful exercises in the entire semester.
+
+```{r}
+#TO-DO
+pacman::p_load(rpart, rpart.plot)
+# n_sub_train = 10000
+# bills_data_train_sub = bills_data_train[sample(1:.N, n_sub_train)]
+# bills_data_test_sub = bills_data_test[sample(1:.N, n_sub_train)]
+Xtrain = bills_data_train[,-"paid_in_full"]
+ytrain = bills_data_train[, paid_in_full]
+classification_tree_mod = rpart(ytrain ~ tot_amount + num_days_to_pay + discount_pct_off + discount_days_until_discount + num_previous_bills + dollars_owed_per_day, data = bills_data_train, method = "class", minsplit = 10, minbucket = 3 )
+```
+
+For those of you who installed `YARF`, what are the number of nodes and depth of the tree? 
+
+```{r}
+#TO-DO
+summary(classification_tree_mod)
+```
+
+For those of you who installed `YARF`, print out an image of the tree.
+
+```{r}
+#TO-DO
+prp(classification_tree_mod)
+
+```
+
+Predict on the test set and report the misclassifcation error
+
+```{r}
+#TO-DO
+yhat_train = predict(classification_tree_mod, data = bills_data_train, type = "class")
+
+
+table(ytrain, yhat_train)
+
+
+yhat_test = predict(classification_tree_mod, newdata = bills_data_test, type = "class")
+table(ytest, yhat_test)
+
+
+
+
+```
+###### Everything below here is due with lab 9
+
+Report the following error metrics: misclassifcation error, precision, recall, F1, FDR, FOR.
+and compute a confusion matrix.
+
+```{r}
+#TO-DO
+
+mean(ytest != yhat_test)
+confusion_matrix = table(ytest,yhat_test)
+precision = confusion_matrix[2, 2]/ sum(confusion_matrix[,2])
+recall = confusion_matrix[2, 2]/ sum(confusion_matrix[2,])
+F1 = 2 / (1/recall+1/ precision)
+FDR = confusion_matrix[1, 2]/ sum(confusion_matrix[,2])
+FOR = confusion_matrix[2, 1]/ sum(confusion_matrix[,1])
+print('oos_ME')
+mean(ytest != yhat_test)
+print('confusion_matrix')
+confusion_matrix
+print('precision')
+precision
+print('recall')
+recall
+print('F1')
+F1
+print('FDR')
+FDR
+print('FOR')
+FOR
+
+
+
+```
+
+Is this a good model? (yes/no and explain).
+
+I think it's pretty decent, our false negative rate is 3.8% and our false positive rate is only 12.8% 
+
+There are probability asymmetric costs to the two types of errors. Assign the costs below and calculate oos total cost.
+
+```{r}
+#TO-DO
+
+Cfn = 10000 #how much we can sell the debt for
+Cfp = 50000 # how much the actual debt is
+Cfn * confusion_matrix[2,1] + (Cfp * confusion_matrix[1, 2])
+```
+
+We now wish to do asymmetric cost classification. Fit a logistic regression model to this data.
+
+```{r}
+#TO-DO
+compute_metrics_prob_classifier = function(p_hats, y_true, res = 0.001){
+  #we first make the grid of all prob thresholds
+  p_thresholds = seq(0 + res, 1 - res, by = res) #values of 0 or 1 are trivial
+
+  #now we create a matrix which will house all of our results
+  performance_metrics = matrix(NA, nrow = length(p_thresholds), ncol = 12)
+  colnames(performance_metrics) = c(
+    "p_th",
+    "TN",
+    "FP",
+    "FN",
+    "TP",
+    "miscl_err",
+    "precision",
+    "recall",
+    "FDR",
+    "FPR",
+    "FOR",
+    "miss_rate"
+  )
+
+  #now we iterate through each p_th and calculate all metrics about the classifier and save
+  n = length(y_true)
+  for (i in 1 : length(p_thresholds)){
+    p_th = p_thresholds[i]
+    y_hats = factor(ifelse(p_hats >= p_th, "0", "1"))
+    confusion_table = table(
+      factor(y_true, levels = c("1", "0")),
+      factor(y_hats, levels = c("1", "0"))
+    )
+
+    fp = confusion_table[1, 2]
+    fn = confusion_table[2, 1]
+    tp = confusion_table[2, 2]
+    tn = confusion_table[1, 1]
+    npp = sum(confusion_table[, 2])
+    npn = sum(confusion_table[, 1])
+    np = sum(confusion_table[2, ])
+    nn = sum(confusion_table[1, ])
+
+    performance_metrics[i, ] = c(
+      p_th,
+      tn,
+      fp,
+      fn,
+      tp,
+      (fp + fn) / n,
+      tp / npp, #precision
+      tp / np,  #recall
+      fp / npp, #false discovery rate (FDR)
+      fp / nn,  #false positive rate (FPR)
+      fn / npn, #false omission rate (FOR)
+      fn / np   #miss rate
+    )
+  }
+
+  #finally return the matrix
+  performance_metrics
+}
+logistic_model = glm(paid_in_full ~., bills_data_train, family = "binomial")
+
+```
+
+Use the function from class to calculate all the error metrics for the values of the probability threshold being 0.001, 0.002, ..., 0.999 in a data frame.
+
+```{r}
+#TO-DO
+bills_data_test = na.omit(bills_data_test)
+p_hats = predict(logistic_model, bills_data_test, type = "response") 
+results_table = compute_metrics_prob_classifier(p_hats, bills_data_test$paid_in_full, res = 0.001)
+results_table
+```
+
+Calculate the column `total_cost` and append it to this data frame.
+
+```{r}
+#TO-DO
+results_table = data.table(results_table)
+results_table[,total_cost := Cfn * FN + Cfp * FP]
+results_table
+```
+
+Which is the winning probability threshold value and the total cost at that threshold?
+
+```{r}
+#TO-DO
+
+results_table[min(total_cost)== total_cost ]
+```
+
+Plot an ROC curve and interpret.
+
+```{r}
+#TO-DO
+pacman::p_load(ggplot2)
+ggplot(results_table) +
+  geom_line(aes(x = FPR, y = recall)) 
+  #geom_abline(intercept = 0, slope = 1, col = "orange") + 
+  #coord_fixed() + xlim(0, 1) + ylim(0, 1)
+```
+
+#TO-DO interpretation
+
+Calculate AUC and interpret.
+
+```{r}
+#TO-DO
+pacman::p_load(pracma)
+-trapz(results_table$FPR, results_table$recall)
+```
+
+#TO-DO interpretation
+
+Plot a DET curve and interpret.
+
+```{r}
+#TO-DO
+ggplot(results_table)+
+  geom_line(aes(x=FDR, y= FOR))
+```
